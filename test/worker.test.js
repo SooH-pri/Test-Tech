@@ -4,7 +4,26 @@ import { DatabaseSync } from 'node:sqlite';
 import { readFileSync } from 'node:fs';
 import worker from '../src/worker.js';
 import { parse, changeSets } from '../src/domain.js';
-import { queryDate, queryExercise, formatDailyRecords, formatExerciseDates, splitReply } from '../src/query.js';
+import { queryDate, queryExercise, queryCatalog, formatCatalogSearch, formatDailyRecords, formatExerciseDates, splitReply } from '../src/query.js';
+
+test('운동 목록 검색은 부분 이름·공백·괄호를 무시하고 정확한 원본 이름을 표시', () => {
+  assert.deepEqual(queryCatalog('에이 비덕션 검색'), { keyword: '에이비덕션' });
+  assert.deepEqual(queryCatalog('운동 검색 덕션'), { keyword: '덕션' });
+  assert.equal(queryCatalog('2026-10-22\n벤치프레스 30kg 10회 3세트'), null);
+  assert.equal(queryCatalog('벤치프레스 언제 했어'), null);
+  const catalog = [
+    { name: '힙 에이비덕션 머신', type: '세트' },
+    { name: '어브덕션(아웃타이)', type: '세트' },
+    { name: '어덕션(이너타이)', type: '세트' },
+  ];
+  assert.match(formatCatalogSearch('에이비덕션', catalog), /힙 에이비덕션 머신/);
+  assert.match(formatCatalogSearch('어브덕션아웃타이', catalog), /어브덕션\(아웃타이\)/);
+  assert.match(formatCatalogSearch('어브덕션（아웃타이）', catalog), /어브덕션\(아웃타이\)/);
+  assert.match(formatCatalogSearch('덕션', catalog), /3개/);
+  assert.match(formatCatalogSearch('없는운동', catalog), /검색 결과가 없습니다/);
+  assert.match(formatCatalogSearch('()', catalog), /검색할 운동 이름/);
+  assert.match(formatCatalogSearch('운동', Array.from({ length: 40 }, (_, i) => ({ name: `운동 ${i}` }))), /처음 30개/);
+});
 
 test('운동 검색은 정확한 이름을 공백 없이 비교하고 날짜별 합계·최근 10일을 표시', () => {
   assert.equal(queryExercise('벤치 프레스 언제 했어?'), '벤치프레스');
@@ -160,12 +179,17 @@ test('웹훅부터 확인 버튼·등록·수정·부분 삭제·전체 삭제·
     assert.equal((await deliver({ update_id: 99 }, 'bad-secret')).status, 403);
     await message('2026-10-22\n레그프레스 100kg 10회 1세트, 12회 3세트', 2);
     assert.equal(sent.length, 0);
+    await message('프레스 검색');
+    assert.match(sent.at(-1).text, /레그 프레스/);
+    assert.equal(writes, 0);
     await message('2026-10-22 조회');
     assert.match(sent.at(-1).text, /기록이 없습니다/);
     assert.equal(writes, 0);
     await message('2026-10-22\n레그프레스 100kg 10회 1세트, 12회 3세트');
     assert.equal(writes, 0);
     const firstButton = sent.at(-1).reply_markup.inline_keyboard[0][0].callback_data;
+    await message('운동검색 레그프레스');
+    assert.match(sent.at(-1).text, /운동 목록 검색/);
     await message('2026-10-22');
     assert.equal(DB.sqlite.prepare("SELECT count(*) n FROM pending WHERE status='pending'").get().n, 1);
     await button(firstButton);

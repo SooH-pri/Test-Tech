@@ -1,5 +1,28 @@
 import { normalize, validDate, setsOf } from './domain.js';
 
+export function queryCatalog(text) {
+  if (/[\r\n]/.test(text.trim())) return null;
+  const input = normalize(text);
+  if (input.startsWith('운동검색')) return { keyword: input.slice(4) };
+  if (input.endsWith('검색')) return { keyword: input.slice(0, -2) };
+  return null;
+}
+
+const searchName = value => normalize(String(value).normalize('NFKC')).replace(/[()[\]{}]/g, '');
+
+export function formatCatalogSearch(keyword, catalog) {
+  const needle = searchName(keyword);
+  if (!needle || keyword.length > 120) return '검색할 운동 이름 일부를 입력하세요.\n예: 에이비덕션 검색 또는 운동검색 덕션';
+  if (!Array.isArray(catalog)) throw new Error('catalog');
+  const matches = catalog.filter(t => typeof t.name === 'string' && searchName(t.name).includes(needle));
+  if (!matches.length) return `${keyword} 검색 결과가 없습니다.\n이름을 더 짧게 입력해보세요. 예: 덕션 검색`;
+  const lines = [`운동 목록 검색 · ${matches.length}개`, ''];
+  matches.slice(0, 30).forEach((t, i) => lines.push(`${i + 1}. ${t.name} · ${t.type ?? '유형 미지정'}`));
+  if (matches.length > 30) lines.push('', '처음 30개만 표시했습니다. 검색어를 더 구체적으로 입력하세요.');
+  lines.push('', '위에 표시된 정확한 운동 이름을 등록·수정·기록 조회에 사용하세요.');
+  return lines.join('\n');
+}
+
 export function queryExercise(text) {
   if (/[\r\n]/.test(text.trim())) return null;
   const match = /^(.+?)(?:언제했어|기록조회)[?？.!]*$/.exec(normalize(text));

@@ -1,5 +1,5 @@
 import { parse, normalize, changeSets, snapshot, describe } from './domain.js';
-import { queryDate, queryExercise, formatDailyRecords, formatExerciseDates, splitReply } from './query.js';
+import { queryDate, queryExercise, queryCatalog, formatCatalogSearch, formatDailyRecords, formatExerciseDates, splitReply } from './query.js';
 
 const ORIGIN = 'https://goodlift.onrender.com';
 class UserError extends Error {}
@@ -184,7 +184,25 @@ export async function processUpdate(env, update) {
   if (!text) return;
   if (['/history', '처리내역', '처리 내역'].includes(text.trim())) { await showHistory(env); return; }
   if (['/start', '/help'].includes(text.trim())) {
-    await send(env, '조회:\n2026-10-22\n2026-10-22 조회\n오늘 조회 / 어제 조회 (한국 시간)\n\n운동 날짜 검색:\n벤치프레스 언제 했어\n레그프레스 기록 조회\n\n등록:\n2026-10-22\n벤치프레스 30kg 10회 3세트\n\n수정:\n2026-10-22 레그프레스 2~4세트 무게 120kg으로 수정\n\n세트 삭제:\n2026-10-22 레그프레스 3~4세트 삭제\n\n전체 삭제:\n2026-10-22 레그프레스 전체 삭제\n\n처리 내역: /history');
+    await send(env, '운동 이름 검색:\n에이비덕션 검색\n운동검색 덕션\n\n조회:\n2026-10-22\n2026-10-22 조회\n오늘 조회 / 어제 조회 (한국 시간)\n\n운동 날짜 검색:\n벤치프레스 언제 했어\n레그프레스 기록 조회\n\n등록:\n2026-10-22\n벤치프레스 30kg 10회 3세트\n\n수정:\n2026-10-22 레그프레스 2~4세트 무게 120kg으로 수정\n\n세트 삭제:\n2026-10-22 레그프레스 3~4세트 삭제\n\n전체 삭제:\n2026-10-22 레그프레스 전체 삭제\n\n처리 내역: /history');
+    return;
+  }
+  const catalogQuery = queryCatalog(text);
+  if (catalogQuery) {
+    const keyword = catalogQuery.keyword;
+    if (!keyword || keyword.length > 120) {
+      await send(env, '검색할 운동 이름 일부를 입력하세요. 예: 에이비덕션 검색');
+      return;
+    }
+    let reply;
+    try {
+      const user = await login(env);
+      reply = formatCatalogSearch(keyword, await api(user, '/workout-types'));
+    } catch {
+      await send(env, '운동 목록을 조회하지 못했습니다. 잠시 후 다시 보내주세요.');
+      return;
+    }
+    for (const chunk of splitReply(reply).slice(0, 40)) await send(env, chunk);
     return;
   }
   const exercise = queryExercise(text);
