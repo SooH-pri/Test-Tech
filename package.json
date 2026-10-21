@@ -1,0 +1,13 @@
+{
+  "name": "goodlift-telegram-worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:local": "wrangler d1 execute workout-bot --local --file=schema.sql",
+    "db:remote": "wrangler d1 execute workout-bot --remote --file=schema.sql"
+  },
+  "devDependencies": { "wrangler": "4.151.3" }
+}
