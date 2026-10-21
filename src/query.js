@@ -1,5 +1,32 @@
 import { normalize, validDate, setsOf } from './domain.js';
 
+export function queryExercise(text) {
+  if (/[\r\n]/.test(text.trim())) return null;
+  const match = /^(.+?)(?:언제했어|기록조회)[?？.!]*$/.exec(normalize(text));
+  return match ? match[1] : null;
+}
+
+export function formatExerciseDates(name, records) {
+  const matched = records.filter(r => normalize(r.workout_type_name) === normalize(name));
+  if (!matched.length) return `${name}\n해당 이름으로 등록된 운동 기록이 없습니다. 사이트의 운동 이름을 확인해주세요.`;
+  const days = new Map();
+  for (const record of matched) {
+    const day = validDate(String(record.workout_date).slice(0, 10));
+    const entry = days.get(day) ?? { sets: 0, records: 0 };
+    entry.sets += record.sets == null ? 0 : setsOf(record).length;
+    entry.records++;
+    days.set(day, entry);
+  }
+  const sorted = [...days].sort(([a], [b]) => a < b ? 1 : a > b ? -1 : 0);
+  const title = matched[0].workout_type_name;
+  const lines = [`${title} 운동 날짜`, `총 ${days.size}일 · 최근 ${Math.min(days.size, 10)}일 표시`, ''];
+  for (const [day, entry] of sorted.slice(0, 10)) {
+    lines.push(`${day} · ${entry.sets ? `${entry.sets}세트` : `${entry.records}개 기록`}`);
+  }
+  lines.push('', '날짜를 보내면 그날의 상세 기록을 확인할 수 있습니다.');
+  return lines.join('\n');
+}
+
 export function queryDate(text, now = new Date()) {
   // 여러 줄 등록 문장은 날짜 조회로 처리하지 않는다.
   if (/[\r\n]/.test(text.trim())) return null;

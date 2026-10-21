@@ -1,5 +1,5 @@
 import { parse, normalize, changeSets, snapshot, describe } from './domain.js';
-import { queryDate, formatDailyRecords, splitReply } from './query.js';
+import { queryDate, queryExercise, formatDailyRecords, formatExerciseDates, splitReply } from './query.js';
 
 const ORIGIN = 'https://goodlift.onrender.com';
 class UserError extends Error {}
@@ -70,9 +70,11 @@ async function api(user, path, method = 'GET', body) {
 }
 
 async function list(user, day) {
-  const result = await api(user, `/workout-records?${new URLSearchParams({ app_user_id: user.id, start_date: day, end_date: day })}`);
+  const params = new URLSearchParams({ app_user_id: user.id });
+  if (day) { params.set('start_date', day); params.set('end_date', day); }
+  const result = await api(user, `/workout-records?${params}`);
   if (!Array.isArray(result)) throw new Error('records');
-  return result.filter(r => String(r.workout_date).slice(0, 10) === day);
+  return day ? result.filter(r => String(r.workout_date).slice(0, 10) === day) : result;
 }
 
 async function prepare(env, text) {
@@ -182,7 +184,20 @@ export async function processUpdate(env, update) {
   if (!text) return;
   if (['/history', '처리내역', '처리 내역'].includes(text.trim())) { await showHistory(env); return; }
   if (['/start', '/help'].includes(text.trim())) {
-    await send(env, '조회:\n2026-10-22\n2026-10-22 조회\n오늘 조회 / 어제 조회 (한국 시간)\n\n등록:\n2026-10-22\n벤치프레스 30kg 10회 3세트\n\n수정:\n2026-10-22 레그프레스 2~4세트 무게 120kg으로 수정\n\n세트 삭제:\n2026-10-22 레그프레스 3~4세트 삭제\n\n전체 삭제:\n2026-10-22 레그프레스 전체 삭제\n\n처리 내역: /history');
+    await send(env, '조회:\n2026-10-22\n2026-10-22 조회\n오늘 조회 / 어제 조회 (한국 시간)\n\n운동 날짜 검색:\n벤치프레스 언제 했어\n레그프레스 기록 조회\n\n등록:\n2026-10-22\n벤치프레스 30kg 10회 3세트\n\n수정:\n2026-10-22 레그프레스 2~4세트 무게 120kg으로 수정\n\n세트 삭제:\n2026-10-22 레그프레스 3~4세트 삭제\n\n전체 삭제:\n2026-10-22 레그프레스 전체 삭제\n\n처리 내역: /history');
+    return;
+  }
+  const exercise = queryExercise(text);
+  if (exercise) {
+    let reply;
+    try {
+      const user = await login(env);
+      reply = formatExerciseDates(exercise, await list(user));
+    } catch {
+      await send(env, 'GoodLift 기록을 조회하지 못했습니다. 잠시 후 다시 보내주세요.');
+      return;
+    }
+    for (const chunk of splitReply(reply)) await send(env, chunk);
     return;
   }
   let day;

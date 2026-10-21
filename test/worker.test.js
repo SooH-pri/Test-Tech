@@ -4,7 +4,28 @@ import { DatabaseSync } from 'node:sqlite';
 import { readFileSync } from 'node:fs';
 import worker from '../src/worker.js';
 import { parse, changeSets } from '../src/domain.js';
-import { queryDate, formatDailyRecords, splitReply } from '../src/query.js';
+import { queryDate, queryExercise, formatDailyRecords, formatExerciseDates, splitReply } from '../src/query.js';
+
+test('운동 검색은 정확한 이름을 공백 없이 비교하고 날짜별 합계·최근 10일을 표시', () => {
+  assert.equal(queryExercise('벤치 프레스 언제 했어?'), '벤치프레스');
+  assert.equal(queryExercise('레그프레스 기록 조회'), '레그프레스');
+  assert.equal(queryExercise('2026-10-22 조회'), null);
+  assert.equal(queryExercise('2026-10-22\n벤치프레스 30kg 10회 3세트'), null);
+  assert.equal(queryExercise('2026-10-22 벤치프레스 전체 삭제'), null);
+  const records = Array.from({ length: 12 }, (_, i) => ({
+    workout_type_name: '벤치프레스', workout_date: `2026-10-${String(i + 1).padStart(2, '0')}`,
+    sets: [{ set_number: 1, weight: 30, reps: 10 }],
+  }));
+  records.push({ workout_type_name: '벤치 프레스', workout_date: '2026-10-12', sets: JSON.stringify([{ set_number: 1 }, { set_number: 2 }]) });
+  records.push({ workout_type_name: '인클라인 벤치프레스', workout_date: '2026-10-22', sets: [] });
+  const result = formatExerciseDates('벤치 프레스', records);
+  assert.match(result, /총 12일 · 최근 10일 표시/);
+  assert.match(result, /2026-10-12 · 3세트/);
+  assert.ok(result.indexOf('2026-10-12') < result.indexOf('2026-10-11'));
+  assert.doesNotMatch(result, /2026-10-22|2026-10-01|2026-10-02/);
+  assert.match(formatExerciseDates('스쿼트', records), /기록이 없습니다/);
+  assert.match(formatExerciseDates('러닝', [{ workout_type_name: '러닝', workout_date: '2026-10-22', sets: null }]), /1개 기록/);
+});
 
 test('조회 명령은 등록과 구분하고 오늘·어제는 한국 날짜로 계산', () => {
   const now = new Date('2026-12-31T15:01:00Z');
@@ -157,6 +178,13 @@ test('웹훅부터 확인 버튼·등록·수정·부분 삭제·전체 삭제·
     assert.equal(writes, 1);
     assert.equal(DB.sqlite.prepare('SELECT count(*) n FROM history').get().n, historyBeforeQuery);
     await message('2026-10-23 조회');
+    assert.match(sent.at(-1).text, /기록이 없습니다/);
+    await message('레그프레스 언제 했어');
+    assert.match(sent.at(-1).text, /2026-10-22 · 4세트/);
+    assert.equal(writes, 1);
+    await message('레그 프레스 기록 조회');
+    assert.match(sent.at(-1).text, /운동 날짜/);
+    await message('인클라인 레그프레스 언제 했어');
     assert.match(sent.at(-1).text, /기록이 없습니다/);
     const writesAfterCreate = writes;
     await deliver({ update_id: ++updateId, callback_query: { id: 'cb', from: { id: 1 }, message: { chat: { id: 1, type: 'private' } }, data: firstButton } });
