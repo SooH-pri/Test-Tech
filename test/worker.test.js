@@ -24,6 +24,33 @@ test('부분 삭제 시 세트 ID와 완료 상태 보존, 마지막 세트 삭�
   assert.equal(record.sets.length, 2);
 });
 
+test('진단 로그는 DB 실패와 Telegram HTTP 오류를 구분하고 비밀 값을 숨김', async () => {
+  const env = { WEBHOOK_SECRET: 'secret', TELEGRAM_USER_ID: '1', TELEGRAM_CHAT_ID: '1', TELEGRAM_BOT_TOKEN: 'DO_NOT_LOG_THIS_TOKEN' };
+  const logs = [];
+  const originalFetch = globalThis.fetch, originalError = console.error;
+  console.error = (...args) => logs.push(args.join(' '));
+  const request = id => new Request('https://test.example/webhook', {
+    method: 'POST', headers: { 'X-Telegram-Bot-Api-Secret-Token': 'secret' },
+    body: JSON.stringify({ update_id: id, message: { from: { id: 1 }, chat: { id: 1, type: 'private' }, text: '/help' } }),
+  });
+  try {
+    env.DB = { prepare() { throw new Error('no such table: deliveries DO_NOT_LOG_THIS_TOKEN'); } };
+    assert.equal((await worker.fetch(request(1), env)).status, 200);
+    assert.match(logs.at(-1), /database.deliveries/);
+    assert.match(logs.at(-1), /missing_table/);
+    env.DB = database();
+    globalThis.fetch = async () => new Response('DO_NOT_LOG_THIS_TOKEN', { status: 401 });
+    assert.equal((await worker.fetch(request(2), env)).status, 200);
+    assert.match(logs.at(-1), /telegram.sendMessage/);
+    assert.match(logs.at(-1), /401/);
+    assert.ok(logs.every(s => !s.includes('DO_NOT_LOG_THIS_TOKEN')));
+  } finally {
+    env.DB.sqlite?.close();
+    globalThis.fetch = originalFetch;
+    console.error = originalError;
+  }
+});
+
 function database() {
   const sqlite = new DatabaseSync(':memory:');
   sqlite.exec(readFileSync(new URL('../schema.sql', import.meta.url), 'utf8'));

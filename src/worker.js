@@ -3,18 +3,42 @@ import { parse, normalize, changeSets, snapshot, describe } from './domain.js';
 const ORIGIN = 'https://goodlift.onrender.com';
 class UserError extends Error {}
 
+async function diagnostic(stage, operation) {
+  try { return await operation(); }
+  catch (error) {
+    // URL·응답 본문·원본 오류에는 비밀 값이 있을 수 있어 출력하지 않는다.
+    const safe = new Error('Operation failed');
+    safe.safeStage = error.safeStage ?? stage;
+    safe.safeStatus = Number.isInteger(error.safeStatus) ? error.safeStatus : undefined;
+    safe.safeReason = /no such table/i.test(String(error.message)) ? 'missing_table'
+      : /not authorized|unauthorized/i.test(String(error.message)) ? 'authorization'
+      : error.name === 'TimeoutError' ? 'timeout' : 'operation_failed';
+    throw safe;
+  }
+}
+
 async function jsonFetch(url, options = {}) {
   const response = await fetch(url, { ...options, signal: AbortSignal.timeout(60000) });
-  if (!response.ok) throw new Error('upstream');
+  if (!response.ok) {
+    const error = new Error('upstream');
+    error.safeStatus = response.status;
+    throw error;
+  }
   return response.json();
 }
 
 export async function tg(env, method, data) {
+  return diagnostic(`telegram.${method}`, async () => {
   const result = await jsonFetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/${method}`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data),
   });
-  if (!result.ok) throw new Error('telegram');
+  if (!result.ok) {
+    const error = new Error('telegram');
+    error.safeStatus = result.error_code;
+    throw error;
+  }
   return result.result;
+  });
 }
 const send = (env, text, buttons) => tg(env, 'sendMessage', {
   chat_id: env.TELEGRAM_CHAT_ID, text,
@@ -124,10 +148,13 @@ async function showHistory(env) {
 export async function processUpdate(env, update) {
   const message = update.message ?? update.callback_query?.message;
   const from = update.message?.from ?? update.callback_query?.from;
-  if (String(from?.id) !== String(env.TELEGRAM_USER_ID) || String(message?.chat?.id) !== String(env.TELEGRAM_CHAT_ID) || message?.chat?.type !== 'private') return;
+  if (String(from?.id) !== String(env.TELEGRAM_USER_ID) || String(message?.chat?.id) !== String(env.TELEGRAM_CHAT_ID) || message?.chat?.type !== 'private') {
+    console.info('Webhook ignored: owner_or_private_chat_mismatch');
+    return;
+  }
   if (!Number.isSafeInteger(update.update_id)) return;
   // Telegram의 동일 이벤트 재전송만 구분. 사용자가 같은 내용을 새로 보내는 것은 허용.
-  const receipt = await env.DB.prepare('INSERT OR IGNORE INTO deliveries(update_id) VALUES(?)').bind(update.update_id).run();
+  const receipt = await diagnostic('database.deliveries', () => env.DB.prepare('INSERT OR IGNORE INTO deliveries(update_id) VALUES(?)').bind(update.update_id).run());
   if (!receipt.meta.changes) return;
   const callback = update.callback_query;
   if (callback) {
@@ -179,7 +206,13 @@ export default {
     let update;
     try { update = await request.json(); } catch { return new Response('Bad request', { status: 400 }); }
     try { await processUpdate(env, update); }
-    catch { console.error('Update handling failed; inspect D1 history before retrying.'); }
+    catch (error) {
+      console.error('Update failed', JSON.stringify({
+        stage: error.safeStage ?? 'handler',
+        status: error.safeStatus ?? null,
+        reason: error.safeReason ?? 'operation_failed',
+      }));
+    }
     // 외부 API 성공 가능성이 있으므로 같은 이벤트를 자동 재실행하지 않는다.
     return Response.json({ ok: true });
   },
