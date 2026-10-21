@@ -4,6 +4,35 @@ import { DatabaseSync } from 'node:sqlite';
 import { readFileSync } from 'node:fs';
 import worker from '../src/worker.js';
 import { parse, changeSets } from '../src/domain.js';
+import { queryDate, formatDailyRecords, splitReply } from '../src/query.js';
+
+test('조회 명령은 등록과 구분하고 오늘·어제는 한국 날짜로 계산', () => {
+  const now = new Date('2026-12-31T15:01:00Z');
+  assert.equal(queryDate('2026-10-22'), '2026-10-22');
+  assert.equal(queryDate('2026년 10월 22일 조회'), '2026-10-22');
+  assert.equal(queryDate(' 오늘 조회 ', now), '2027-01-01');
+  assert.equal(queryDate('어제조회', now), '2026-12-31');
+  assert.equal(queryDate('어제 조회', new Date('2024-02-29T15:01:00Z')), '2024-02-29');
+  assert.equal(queryDate('2026-10-22\n벤치프레스30kg10회3세트'), null);
+  assert.equal(queryDate('2026-10-22 레그프레스 전체 삭제'), null);
+  assert.throws(() => queryDate('2026-02-30 조회'));
+  assert.throws(() => queryDate('다음주 조회'));
+});
+
+test('조회 결과는 세트·시간·메모를 표시하고 긴 기록을 손실 없이 분할', () => {
+  assert.match(formatDailyRecords('2026-10-22', []), /기록이 없습니다/);
+  const reply = formatDailyRecords('2026-10-22', [
+    { workout_type_name: '벤치프레스', sets: JSON.stringify([{ set_number: 1, weight: 30, reps: 10 }]) },
+    { workout_type_name: '러닝', sets: null, duration_minutes: 20, duration_seconds: 30, notes: '가볍게' },
+  ]);
+  assert.match(reply, /30kg × 10회/);
+  assert.match(reply, /20분 30초/);
+  assert.match(reply, /가볍게/);
+  const long = reply.repeat(200) + '💪'.repeat(4000);
+  const chunks = splitReply(long);
+  assert.equal(chunks.join(''), long);
+  assert.ok(chunks.every(s => s.length <= 3500 && !/[\uD800-\uDBFF]$/.test(s)));
+});
 
 test('운동 문장·공백·무게 상속·단위·잘못된 범위 검증', () => {
   const p = parse('2026년 10월 22일\n벤치프레스30kg10회3세트\n레그 프레스 100 kg 10 회 1 세트, 이후 12개씩 3세트');
@@ -105,16 +134,30 @@ test('웹훅부터 확인 버튼·등록·수정·부분 삭제·전체 삭제·
     method: 'POST', headers: { 'X-Telegram-Bot-Api-Secret-Token': secret }, body: JSON.stringify(update),
   }), env);
   const message = (text, user = 1) => deliver({ update_id: ++updateId, message: { from: { id: user }, chat: { id: 1, type: 'private' }, text } });
-  const button = () => deliver({ update_id: ++updateId, callback_query: { id: 'cb', from: { id: 1 }, message: { chat: { id: 1, type: 'private' } }, data: sent.at(-1).reply_markup.inline_keyboard[0][0].callback_data } });
+  const button = (data = sent.at(-1).reply_markup.inline_keyboard[0][0].callback_data) => deliver({ update_id: ++updateId, callback_query: { id: 'cb', from: { id: 1 }, message: { chat: { id: 1, type: 'private' } }, data } });
   try {
     assert.equal((await deliver({ update_id: 99 }, 'bad-secret')).status, 403);
     await message('2026-10-22\n레그프레스 100kg 10회 1세트, 12회 3세트', 2);
     assert.equal(sent.length, 0);
+    await message('2026-10-22 조회');
+    assert.match(sent.at(-1).text, /기록이 없습니다/);
+    assert.equal(writes, 0);
     await message('2026-10-22\n레그프레스 100kg 10회 1세트, 12회 3세트');
     assert.equal(writes, 0);
     const firstButton = sent.at(-1).reply_markup.inline_keyboard[0][0].callback_data;
-    await button();
+    await message('2026-10-22');
+    assert.equal(DB.sqlite.prepare("SELECT count(*) n FROM pending WHERE status='pending'").get().n, 1);
+    await button(firstButton);
     assert.equal(records[0].sets.length, 4);
+    const historyBeforeQuery = DB.sqlite.prepare('SELECT count(*) n FROM history').get().n;
+    await message('2026년 10월 22일 조회');
+    assert.match(sent.at(-1).text, /레그 프레스/);
+    assert.match(sent.at(-1).text, /4세트: 100kg × 12회/);
+    assert.equal(sent.at(-1).reply_markup, undefined);
+    assert.equal(writes, 1);
+    assert.equal(DB.sqlite.prepare('SELECT count(*) n FROM history').get().n, historyBeforeQuery);
+    await message('2026-10-23 조회');
+    assert.match(sent.at(-1).text, /기록이 없습니다/);
     const writesAfterCreate = writes;
     await deliver({ update_id: ++updateId, callback_query: { id: 'cb', from: { id: 1 }, message: { chat: { id: 1, type: 'private' } }, data: firstButton } });
     assert.equal(writes, writesAfterCreate);

@@ -1,4 +1,5 @@
 import { parse, normalize, changeSets, snapshot, describe } from './domain.js';
+import { queryDate, formatDailyRecords, splitReply } from './query.js';
 
 const ORIGIN = 'https://goodlift.onrender.com';
 class UserError extends Error {}
@@ -181,7 +182,25 @@ export async function processUpdate(env, update) {
   if (!text) return;
   if (['/history', '처리내역', '처리 내역'].includes(text.trim())) { await showHistory(env); return; }
   if (['/start', '/help'].includes(text.trim())) {
-    await send(env, '등록:\n2026-10-22\n벤치프레스 30kg 10회 3세트\n\n수정:\n2026-10-22 레그프레스 2~4세트 무게 120kg으로 수정\n\n세트 삭제:\n2026-10-22 레그프레스 3~4세트 삭제\n\n전체 삭제:\n2026-10-22 레그프레스 전체 삭제\n\n처리 내역: /history');
+    await send(env, '조회:\n2026-10-22\n2026-10-22 조회\n오늘 조회 / 어제 조회 (한국 시간)\n\n등록:\n2026-10-22\n벤치프레스 30kg 10회 3세트\n\n수정:\n2026-10-22 레그프레스 2~4세트 무게 120kg으로 수정\n\n세트 삭제:\n2026-10-22 레그프레스 3~4세트 삭제\n\n전체 삭제:\n2026-10-22 레그프레스 전체 삭제\n\n처리 내역: /history');
+    return;
+  }
+  let day;
+  try { day = queryDate(text); }
+  catch (e) { await send(env, e.message); return; }
+  if (day) {
+    let reply;
+    try {
+      const user = await login(env);
+      reply = formatDailyRecords(day, await list(user, day));
+    } catch {
+      await send(env, 'GoodLift 기록을 조회하지 못했습니다. 잠시 후 다시 보내주세요.');
+      return;
+    }
+    const chunks = splitReply(reply);
+    // 무료 플랜 요청당 외부 호출 한도를 지킨다.
+    for (const chunk of chunks.slice(0, 40)) await send(env, chunk);
+    if (chunks.length > 40) await send(env, '기록이 매우 많아 일부만 표시했습니다. 나머지는 GoodLift에서 확인해주세요.');
     return;
   }
   let p;
